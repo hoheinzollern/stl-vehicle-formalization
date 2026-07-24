@@ -1,0 +1,61 @@
+name: docs
+
+# Compile the proofs with the pinned Nix toolchain, generate HTML with
+# rocqnavi (a coq2html fork with coqdoc-compatible file names), and publish
+# to GitHub Pages under a per-version directory. Tagging vX.Y publishes to
+# /vX.Y/; a manual run publishes to the version given as input.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version subdirectory to publish under (e.g. v0.1)'
+        required: true
+        default: v0.1
+
+permissions:
+  contents: write
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - uses: cachix/cachix-action@v15
+        with:
+          name: coq
+
+      - name: Compile proofs (produces .vo/.glob)
+        run: |
+          nix-shell --run '
+            rocq makefile -f _CoqProject -o Makefile.coq &&
+            make -f Makefile.coq -j2'
+
+      - name: Generate HTML with rocqnavi
+        run: |
+          rocqnavi=$(nix-build .nix/rocqnavi.nix --no-out-link)/bin/rocqnavi
+          mkdir -p html
+          "$rocqnavi" -d html -Q . STLVehicle *.glob *.v
+
+      - name: Determine version directory
+        id: ver
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "version=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./html
+          destination_dir: ${{ steps.ver.outputs.version }}
+          keep_files: true
